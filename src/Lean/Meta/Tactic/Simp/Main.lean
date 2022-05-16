@@ -765,23 +765,13 @@ def Methods.appendPost (methods : Methods) (post : Expr → SimpM Step) : Method
 
 end Simp
 
-def myPre (e : Expr) : SimpM Simp.Step :=
-  dbg_trace s!"Running custom pre on {e}"
-  pure (Simp.Step.visit (Simp.Result.mk e none))
-
-  -- match e with 
-  -- | Expr.app (Expr.app (Expr.app (Expr.const name _ _) _ _) _ _) (Expr.lam _ _ (Expr.letE ..) _) _ => do
-  --   IO.println s!"Custom Pre: Matching {name}(fun x => let ...) pattern!"
-  --   pure (Simp.Step.visit (Simp.Result.mk e none))
-  -- | _ => pure (Simp.Step.visit (Simp.Result.mk e none))
-
 def simp (e : Expr) (ctx : Simp.Context) (discharge? : Option Simp.Discharge := none) (pres posts : Array (Expr → SimpM Simp.Step) := #[]) : MetaM Simp.Result := do profileitM Exception "simp" (← getOptions) do
   match discharge? with
   | none   => Simp.main e ctx (methods := Simp.DefaultMethods.methods 
-                                          |> (pres.push myPre).foldl  (λ m p => m.appendPre p) 
+                                          |> pres.foldl  (λ m p => m.appendPre p) 
                                           |> posts.foldl (λ m p => m.appendPost p))
   | some d => Simp.main e ctx (methods := { pre := (Simp.preDefault · d), post := (Simp.postDefault · d), discharge? := d }
-                                          |> (pres.push myPre).foldl  (λ m p => m.appendPre  p) 
+                                          |> pres.foldl  (λ m p => m.appendPre  p) 
                                           |> posts.foldl (λ m p => m.appendPost p))
 
 def dsimp (e : Expr) (ctx : Simp.Context) : MetaM Expr := do profileitM Exception "dsimp" (← getOptions) do
