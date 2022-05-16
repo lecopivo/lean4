@@ -118,15 +118,11 @@ private def addSimpTheorem (thms : Meta.SimpTheorems) (stx : Syntax) (post : Boo
 structure ElabSimpArgsResult where
   ctx     : Simp.Context
   starArg : Bool := false
-  pres    : Array (Expr → Simp.SimpM Simp.Step) := #[]
-  posts   : Array (Expr → Simp.SimpM Simp.Step) := #[]
-
 
 inductive ResolveSimpIdResult where
   | none
   | expr (e : Expr)
   | ext  (ext : SimpExtension)
-  | prePost (fname : Name)
 
 /--
   Elaborate extra simp theorems provided to `simp`. `stx` is of the `simpTheorem,*`
@@ -172,12 +168,6 @@ private def elabSimpArgs (stx : Syntax) (ctx : Simp.Context) (eraseLocal : Bool)
           | .expr e  => thms ← addDeclToUnfoldOrTheorem thms e post inv kind
           | .ext ext => thmsArray := thmsArray.push (← ext.getTheorems)
           | .none    => thms ← addSimpTheorem thms term post inv
-          | .prePost n => 
-            -- let e' ← getEnv
-            -- e'.evalConstCheck
-            -- let f : (Expr → Simp.SimpM Simp.Step) ← (evalConst _ n)
-            -- append f to `pres` or `posts`
-            continue
         else if arg.getKind == ``Lean.Parser.Tactic.simpStar then
           starArg := true
         else
@@ -193,13 +183,7 @@ where
     if simpArgTerm.isIdent then
       try
         if let some e ← Term.resolveId? simpArgTerm (withInfo := true) then
-          let E ← inferType e
-          let prePostType := Lean.mkForall default default (Lean.mkConst `Lean.Expr) (Lean.mkApp (Lean.mkConst `Lean.Meta.Simp.SimpM) (Lean.mkConst `Lean.Meta.Simp.Step))
-          if E == prePostType then
-            dbg_trace s!"Registered pre post method: {e}"
-            return .prePost e.constName!
-          else
-            return .expr e
+          return .expr e
         else
           resolveExt simpArgTerm.getId.eraseMacroScopes
       catch _ =>
@@ -213,9 +197,6 @@ structure MkSimpContextResult where
   ctx              : Simp.Context
   dischargeWrapper : Simp.DischargeWrapper
   fvarIdToLemmaId  : FVarIdToLemmaId
-  pres    : Array (Expr → Simp.SimpM Simp.Step) := #[]
-  posts   : Array (Expr → Simp.SimpM Simp.Step) := #[]
-
 
 /--
    Create the `Simp.Context` for the `simp`, `dsimp`, and `simp_all` tactics.
@@ -242,7 +223,7 @@ def mkSimpContext (stx : Syntax) (eraseLocal : Bool) (kind := SimpKind.simp) (ig
     simpTheorems := #[simpTheorems], congrTheorems
   }
   if !r.starArg || ignoreStarArg then
-    return { r with fvarIdToLemmaId := {}, dischargeWrapper, pres := r.pres, posts := r.posts }
+    return { r with fvarIdToLemmaId := {}, dischargeWrapper }
   else
     let ctx := r.ctx
     let mut simpTheorems := ctx.simpTheorems
@@ -257,7 +238,7 @@ def mkSimpContext (stx : Syntax) (eraseLocal : Bool) (kind := SimpKind.simp) (ig
         fvarIdToLemmaId := fvarIdToLemmaId.insert fvarId id
         simpTheorems ← simpTheorems.addTheorem proof (name? := id)
     let ctx := { ctx with simpTheorems }
-    return { ctx, fvarIdToLemmaId, dischargeWrapper, pres := r.pres, posts := r.posts }
+    return { ctx, fvarIdToLemmaId, dischargeWrapper }
 
 /--
 `simpLocation ctx discharge? varIdToLemmaId loc`
@@ -272,7 +253,7 @@ Its primary use is as the implementation of the
 but can also be used by other tactics when a `Syntax` is not available.
 
 For many tactics other than the simplifier,
-one should use the `withLocation` tactic combinatorb
+one should use the `withLocation` tactic combinator
 when working with a `location`.
 -/
 def simpLocation (ctx : Simp.Context) (discharge? : Option Simp.Discharge := none) (fvarIdToLemmaId : FVarIdToLemmaId := {}) (loc : Location) (pres posts : Array (Expr → Simp.SimpM Simp.Step) := #[]) : TacticM Unit := do
@@ -296,9 +277,9 @@ where
   "simp " (config)? (discharger)? ("only ")? ("[" simpLemma,* "]")? (location)?
 -/
 @[builtinTactic Lean.Parser.Tactic.simp] def evalSimp : Tactic := fun stx => do
-  let { ctx, fvarIdToLemmaId, dischargeWrapper, pres, posts } ← withMainContext <| mkSimpContext stx (eraseLocal := false)
+  let { ctx, fvarIdToLemmaId, dischargeWrapper } ← withMainContext <| mkSimpContext stx (eraseLocal := false)
   dischargeWrapper.with fun discharge? =>
-    simpLocation ctx discharge? fvarIdToLemmaId (expandOptLocation stx[5]) pres posts
+    simpLocation ctx discharge? fvarIdToLemmaId (expandOptLocation stx[5])
 
 @[builtinTactic Lean.Parser.Tactic.simpAll] def evalSimpAll : Tactic := fun stx => do
   let { ctx, .. } ← mkSimpContext stx (eraseLocal := true) (kind := .simpAll) (ignoreStarArg := true)
