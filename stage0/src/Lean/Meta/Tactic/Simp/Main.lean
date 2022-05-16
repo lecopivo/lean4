@@ -750,12 +750,44 @@ def methods : Methods :=
 
 end DefaultMethods
 
+def Methods.appendPre (methods : Methods) (pre : Expr → SimpM Step) : Methods :=
+  {methods with pre := λ e => do
+    let s ← methods.pre e
+    andThen s (λ e => do pure (some (← pre e)))
+  }
+
+def Methods.appendPost (methods : Methods) (post : Expr → SimpM Step) : Methods :=
+  {methods with post := λ e => do
+    let s ← methods.post e
+    andThen s (λ e => do pure (some (← post e)))
+  }
+
+
 end Simp
 
-def simp (e : Expr) (ctx : Simp.Context) (discharge? : Option Simp.Discharge := none) : MetaM Simp.Result := do profileitM Exception "simp" (← getOptions) do
+def myPre (e : Expr) : SimpM Simp.Step :=
+  match e with 
+  | Expr.app (Expr.app (Expr.app (Expr.const name _ _) _ _) _ _) (Expr.lam _ _ (Expr.letE ..) _) _ => do
+    IO.println s!"Custom Pre: Matching {name}(fun x => let ...) pattern!"
+    pure (Simp.Step.visit (Simp.Result.mk e none))
+  | _ => pure (Simp.Step.visit (Simp.Result.mk e none))
+
+def myPost (e : Expr) : SimpM Simp.Step :=
+  match e with 
+  | Expr.app (Expr.app (Expr.app (Expr.const name _ _) _ _) _ _) (Expr.lam _ _ (Expr.letE ..) _) _ => do
+    IO.println s!"Custom Post: Matching {name}(fun x => let ...) pattern!"
+    pure (Simp.Step.visit (Simp.Result.mk e none))
+  | _ => pure (Simp.Step.visit (Simp.Result.mk e none))
+
+
+def simp (e : Expr) (ctx : Simp.Context) (discharge? : Option Simp.Discharge := none) (pres : Array (Expr → SimpM Simp.Step) := #[]) (posts : Array (Expr → SimpM Simp.Step) := #[]) : MetaM Simp.Result := do profileitM Exception "simp" (← getOptions) do
   match discharge? with
-  | none   => Simp.main e ctx (methods := Simp.DefaultMethods.methods)
-  | some d => Simp.main e ctx (methods := { pre := (Simp.preDefault · d), post := (Simp.postDefault · d), discharge? := d })
+  | none   => Simp.main e ctx (methods := Simp.DefaultMethods.methods 
+                                          |> (pres.push myPre).foldl  (λ m p => m.appendPre  p) 
+                                          |> posts.foldl (λ m p => m.appendPost p))
+  | some d => Simp.main e ctx (methods := { pre := (Simp.preDefault · d), post := (Simp.postDefault · d), discharge? := d }
+                                          |> pres.foldl  (λ m p => m.appendPre  p) 
+                                          |> posts.foldl (λ m p => m.appendPost p))
 
 def dsimp (e : Expr) (ctx : Simp.Context) : MetaM Expr := do profileitM Exception "dsimp" (← getOptions) do
   Simp.dsimpMain e ctx (methods := Simp.DefaultMethods.methods)
@@ -774,9 +806,9 @@ def applySimpResultToTarget (mvarId : MVarId) (target : Expr) (r : Simp.Result) 
       return mvarId
 
 /-- See `simpTarget`. This method assumes `mvarId` is not assigned, and we are already using `mvarId`s local context. -/
-def simpTargetCore (mvarId : MVarId) (ctx : Simp.Context) (discharge? : Option Simp.Discharge := none) (mayCloseGoal := true) : MetaM (Option MVarId) := do
+def simpTargetCore (mvarId : MVarId) (ctx : Simp.Context) (discharge? : Option Simp.Discharge := none) (mayCloseGoal := true) (pres posts : Array (Expr → SimpM Simp.Step) := #[]) : MetaM (Option MVarId) := do
   let target ← instantiateMVars (← getMVarType mvarId)
-  let r ← simp target ctx discharge?
+  let r ← simp target ctx discharge? pres posts
   if mayCloseGoal && r.expr.isConstOf ``True then
     match r.proof? with
     | some proof => assignExprMVar mvarId  (← mkOfEqTrue proof)
@@ -788,10 +820,10 @@ def simpTargetCore (mvarId : MVarId) (ctx : Simp.Context) (discharge? : Option S
 /--
   Simplify the given goal target (aka type). Return `none` if the goal was closed. Return `some mvarId'` otherwise,
   where `mvarId'` is the simplified new goal. -/
-def simpTarget (mvarId : MVarId) (ctx : Simp.Context) (discharge? : Option Simp.Discharge := none) (mayCloseGoal := true) : MetaM (Option MVarId) :=
+def simpTarget (mvarId : MVarId) (ctx : Simp.Context) (discharge? : Option Simp.Discharge := none) (mayCloseGoal := true) (pres posts : Array (Expr → SimpM Simp.Step) := #[]) : MetaM (Option MVarId) :=
   withMVarContext mvarId do
     checkNotAssigned mvarId `simp
-    simpTargetCore mvarId ctx discharge? mayCloseGoal
+    simpTargetCore mvarId ctx discharge? mayCloseGoal pres posts
 
 /--
   Apply the result `r` for `prop` (which is inhabited by `proof`). Return `none` if the goal was closed. Return `some (proof', prop')`
@@ -822,8 +854,8 @@ def applySimpResultToFVarId (mvarId : MVarId) (fvarId : FVarId) (r : Simp.Result
   otherwise, where `proof' : prop'` and `prop'` is the simplified `prop`.
 
   This method assumes `mvarId` is not assigned, and we are already using `mvarId`s local context. -/
-def simpStep (mvarId : MVarId) (proof : Expr) (prop : Expr) (ctx : Simp.Context) (discharge? : Option Simp.Discharge := none) (mayCloseGoal := true) : MetaM (Option (Expr × Expr)) := do
-  let r ← simp prop ctx discharge?
+def simpStep (mvarId : MVarId) (proof : Expr) (prop : Expr) (ctx : Simp.Context) (discharge? : Option Simp.Discharge := none) (mayCloseGoal := true)  (pres posts : Array (Expr → SimpM Simp.Step) := #[]) : MetaM (Option (Expr × Expr)) := do
+  let r ← simp prop ctx discharge? pres posts
   applySimpResultToProp mvarId proof prop r (mayCloseGoal := mayCloseGoal)
 
 def applySimpResultToLocalDeclCore (mvarId : MVarId) (fvarId : FVarId) (r : Option (Expr × Expr)) : MetaM (Option (FVarId × MVarId)) := do
@@ -854,16 +886,16 @@ def applySimpResultToLocalDecl (mvarId : MVarId) (fvarId : FVarId) (r : Simp.Res
   else
     applySimpResultToLocalDeclCore mvarId fvarId (← applySimpResultToFVarId mvarId fvarId r mayCloseGoal)
 
-def simpLocalDecl (mvarId : MVarId) (fvarId : FVarId) (ctx : Simp.Context) (discharge? : Option Simp.Discharge := none) (mayCloseGoal := true) : MetaM (Option (FVarId × MVarId)) := do
+def simpLocalDecl (mvarId : MVarId) (fvarId : FVarId) (ctx : Simp.Context) (discharge? : Option Simp.Discharge := none) (mayCloseGoal := true) (pres posts : Array (Expr → SimpM Simp.Step) := #[]) : MetaM (Option (FVarId × MVarId)) := do
   withMVarContext mvarId do
     checkNotAssigned mvarId `simp
     let localDecl ← getLocalDecl fvarId
     let type ← instantiateMVars localDecl.type
-    applySimpResultToLocalDeclCore mvarId fvarId (← simpStep mvarId (mkFVar fvarId) type ctx discharge? mayCloseGoal)
+    applySimpResultToLocalDeclCore mvarId fvarId (← simpStep mvarId (mkFVar fvarId) type ctx discharge? mayCloseGoal pres posts)
 
 abbrev FVarIdToLemmaId := FVarIdMap Name
 
-def simpGoal (mvarId : MVarId) (ctx : Simp.Context) (discharge? : Option Simp.Discharge := none) (simplifyTarget : Bool := true) (fvarIdsToSimp : Array FVarId := #[]) (fvarIdToLemmaId : FVarIdToLemmaId := {}) : MetaM (Option (Array FVarId × MVarId)) := do
+def simpGoal (mvarId : MVarId) (ctx : Simp.Context) (discharge? : Option Simp.Discharge := none) (simplifyTarget : Bool := true) (fvarIdsToSimp : Array FVarId := #[]) (fvarIdToLemmaId : FVarIdToLemmaId := {}) (pres posts : Array (Expr → SimpM Simp.Step) := #[]) : MetaM (Option (Array FVarId × MVarId)) := do
   withMVarContext mvarId do
     checkNotAssigned mvarId `simp
     let mut mvarId := mvarId
@@ -875,7 +907,7 @@ def simpGoal (mvarId : MVarId) (ctx : Simp.Context) (discharge? : Option Simp.Di
       let ctx ← match fvarIdToLemmaId.find? localDecl.fvarId with
         | none => pure ctx
         | some thmId => pure { ctx with simpTheorems := ctx.simpTheorems.eraseTheorem thmId }
-      let r ← simp type ctx discharge?
+      let r ← simp type ctx discharge? pres posts
       match r.proof? with
       | some proof => match (← applySimpResultToProp mvarId (mkFVar fvarId) type r) with
         | none => return none
@@ -889,7 +921,7 @@ def simpGoal (mvarId : MVarId) (ctx : Simp.Context) (discharge? : Option Simp.Di
         mvarId ← replaceLocalDeclDefEq mvarId fvarId r.expr
         replaced := replaced.push fvarId
     if simplifyTarget then
-      match (← simpTarget mvarId ctx discharge?) with
+      match (← simpTarget mvarId ctx discharge? (pres:=pres) (posts:=posts)) with
       | none => return none
       | some mvarIdNew => mvarId := mvarIdNew
     let (fvarIdsNew, mvarIdNew) ← assertHypotheses mvarId toAssert

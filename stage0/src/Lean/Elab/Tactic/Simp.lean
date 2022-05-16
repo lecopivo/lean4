@@ -123,6 +123,7 @@ inductive ResolveSimpIdResult where
   | none
   | expr (e : Expr)
   | ext  (ext : SimpExtension)
+  | prePost (fname : Name)
 
 /--
   Elaborate extra simp theorems provided to `simp`. `stx` is of the `simpTheorem,*`
@@ -168,6 +169,7 @@ private def elabSimpArgs (stx : Syntax) (ctx : Simp.Context) (eraseLocal : Bool)
           | .expr e  => thms ← addDeclToUnfoldOrTheorem thms e post inv kind
           | .ext ext => thmsArray := thmsArray.push (← ext.getTheorems)
           | .none    => thms ← addSimpTheorem thms term post inv
+          | .prePost n => continue
         else if arg.getKind == ``Lean.Parser.Tactic.simpStar then
           starArg := true
         else
@@ -183,7 +185,13 @@ where
     if simpArgTerm.isIdent then
       try
         if let some e ← Term.resolveId? simpArgTerm (withInfo := true) then
-          return .expr e
+          let E ← inferType e
+          let prePostType := Lean.mkForall default default (Lean.mkConst `Lean.Expr) (Lean.mkApp (Lean.mkConst `Lean.Meta.Simp.SimpM) (Lean.mkConst `Lean.Meta.Simp.Step))
+          if E == prePostType then
+            dbg_trace s!"Registered pre post method: {e}"
+            return .prePost e.constName!
+          else
+            return .expr e
         else
           resolveExt simpArgTerm.getId.eraseMacroScopes
       catch _ =>
@@ -253,7 +261,7 @@ Its primary use is as the implementation of the
 but can also be used by other tactics when a `Syntax` is not available.
 
 For many tactics other than the simplifier,
-one should use the `withLocation` tactic combinator
+one should use the `withLocation` tactic combinatorb
 when working with a `location`.
 -/
 def simpLocation (ctx : Simp.Context) (discharge? : Option Simp.Discharge := none) (fvarIdToLemmaId : FVarIdToLemmaId := {}) (loc : Location) : TacticM Unit := do
