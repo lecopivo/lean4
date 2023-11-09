@@ -21,6 +21,7 @@ inductive Key where
   | other : Key
   | arrow : Key
   | proj  : Name → Nat → Nat → Key
+  | lambda : Key
   deriving Inhabited, BEq, Repr
 
 protected def Key.hash : Key → UInt64
@@ -31,6 +32,7 @@ protected def Key.hash : Key → UInt64
   | .other       => 2411
   | .arrow       => 17
   | .proj s i a  =>  mixHash (hash a) $ mixHash (hash s) (hash i)
+  | .lambda       => 42
 
 instance : Hashable Key := ⟨Key.hash⟩
 

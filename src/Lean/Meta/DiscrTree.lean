@@ -56,6 +56,7 @@ def Key.ctorIdx : Key → Nat
   | .const .. => 4
   | .arrow    => 5
   | .proj ..  => 6
+  | .lambda .. => 7
 
 def Key.lt : Key → Key → Bool
   | .lit v₁,        .lit v₂        => v₁ < v₂
@@ -76,6 +77,7 @@ def Key.format : Key → Format
   | .proj s i _             => Std.format s ++ "." ++ Std.format i
   | .fvar k _               => Std.format k.name
   | .arrow                  => "→"
+  | .lambda                 => "λ"
 
 instance : ToFormat Key := ⟨Key.format⟩
 
@@ -325,7 +327,7 @@ def reduceDT (e : Expr) (root : Bool) (config : WhnfCoreConfig) : MetaM Expr :=
 
 /- Remark: we use `shouldAddAsStar` only for nested terms, and `root == false` for nested terms -/
 
-private def pushArgs (root : Bool) (todo : Array Expr) (e : Expr) (config : WhnfCoreConfig) : MetaM (Key × Array Expr) := do
+private partial def pushArgs (root : Bool) (todo : Array Expr) (e : Expr) (config : WhnfCoreConfig) : MetaM (Key × Array Expr) := do
   if hasNoindexAnnotation e then
     return (.star, todo)
   else
@@ -374,6 +376,10 @@ private def pushArgs (root : Bool) (todo : Array Expr) (e : Expr) (config : Whnf
         return (.other, todo)
       else
         return (.arrow, todo.push d |>.push b)
+    | .lam _ t b _ =>
+      let mx ← mkFreshExprMVar t
+      let b' := b.instantiate1 mx
+      return (.lambda, #[b'])
     | _ =>
       return (.other, todo)
 
@@ -450,7 +456,7 @@ def insert [BEq α] (d : DiscrTree α) (e : Expr) (v : α) (config : WhnfCoreCon
   let keys ← mkPath e config
   return d.insertCore keys v config
 
-private def getKeyArgs (e : Expr) (isMatch root : Bool) (config : WhnfCoreConfig) : MetaM (Key × Array Expr) := do
+private partial def getKeyArgs (e : Expr) (isMatch root : Bool) (config : WhnfCoreConfig) : MetaM (Key × Array Expr) := do
   let e ← reduceDT e root config
   unless root do
     -- See pushArgs
@@ -527,6 +533,10 @@ private def getKeyArgs (e : Expr) (isMatch root : Bool) (config : WhnfCoreConfig
       return (.other, #[])
     else
       return (.arrow, #[d, b])
+  | .lam _ t b _ =>
+    let mx ← mkFreshExprMVar t
+    let b' := b.instantiate1 mx
+    return (.lambda, #[b'])
   | _ =>
     return (.other, #[])
 
